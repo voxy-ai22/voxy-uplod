@@ -1,0 +1,18 @@
+
+{
+  "functions": {
+    "api/upload/route.ts": {
+      "maxDuration": 60
+    }
+  },
+  "routes": [
+    {
+      "src": "/api/upload",
+      "dest": "api/upload/route.ts"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "index.html"
+    }
+  ]
+}

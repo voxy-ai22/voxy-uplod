@@ -1,0 +1,7 @@
+{
+  "name": "LuminaLink - Futuristic Image to Link",
+  "description": "A glassmorphism-themed high-performance image uploader that generates CDN links using Vercel Blob Storage.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
