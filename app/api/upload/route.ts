@@ -2,6 +2,8 @@
 import { put } from "@vercel/blob";
 import { NextResponse } from "next/server";
 
+export const runtime = 'edge'; // Menggunakan Edge Runtime untuk latensi minimal (Opsional)
+
 export async function POST(req: Request) {
   try {
     const form = await req.formData();
@@ -11,16 +13,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    // Sanitize filename and append timestamp to avoid collisions
-    const filename = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.]/g, '_')}`;
+    // Ekstraksi ekstensi
+    const ext = file.name.split('.').pop();
+    // Sanitasi nama file: hanya alfanumerik + timestamp
+    const safeName = `${Date.now()}.${ext}`;
     
-    const blob = await put(filename, file, {
+    // Upload langsung ke Vercel Blob
+    // Token BLOB_READ_WRITE_TOKEN harus ada di env Vercel
+    const blob = await put(safeName, file, {
       access: "public",
+      addRandomSuffix: true,
+      contentType: file.type,
     });
 
     return NextResponse.json({ url: blob.url });
   } catch (err: any) {
-    console.error("Upload error:", err);
-    return NextResponse.json({ error: "Upload failed: " + err.message }, { status: 500 });
+    console.error("Vercel Blob Upload error:", err);
+    return NextResponse.json(
+      { error: "Upload gagal", details: err.message }, 
+      { status: 500 }
+    );
   }
 }

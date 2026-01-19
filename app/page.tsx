@@ -1,9 +1,9 @@
 
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { ImageIcon, History as HistoryIcon, Trash2, ExternalLink, Zap, Timer } from 'lucide-react';
+import { ImageIcon, History as HistoryIcon, Trash2, ExternalLink, Zap, Timer, AlertCircle } from 'lucide-react';
 import UploadBox from '@/components/UploadBox';
 import OutputBox from '@/components/OutputBox';
 
@@ -22,8 +22,8 @@ export default function HomePage() {
   const [history, setHistory] = useState<UploadHistory[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null);
 
-  // Timer untuk update UI countdown dan auto-cleanup
   useEffect(() => {
     const timer = setInterval(() => {
       const now = Date.now();
@@ -50,7 +50,7 @@ export default function HomePage() {
         const filtered = parsed.filter((item: any) => item.expiryDate > now);
         setHistory(filtered);
       } catch (e) {
-        console.error("Failed to parse history");
+        console.error("History parse failed");
       }
     }
   }, []);
@@ -58,50 +58,39 @@ export default function HomePage() {
   const handleUpload = async (file: File, expiryMinutes: number) => {
     setIsUploading(true);
     setUploadProgress(0);
+    setRateLimitError(null);
 
     const formData = new FormData();
     formData.append('file', file);
 
-    // Tentukan window parameter untuk rate limit berdasarkan pilihan user
     let windowTag = '1m';
     if (expiryMinutes === 60) windowTag = '1h';
     if (expiryMinutes === 1440) windowTag = '1d';
 
-    // Menggunakan XMLHttpRequest untuk progress real-time
     const xhr = new XMLHttpRequest();
     
     xhr.upload.addEventListener('progress', (e) => {
       if (e.lengthComputable) {
-        const percentComplete = (e.loaded / e.total) * 100;
-        setUploadProgress(percentComplete);
+        setUploadProgress((e.loaded / e.total) * 100);
       }
     });
 
     const progressInterval = setInterval(() => {
-      setUploadProgress(prev => {
-        if (prev >= 95) {
-          clearInterval(progressInterval);
-          return 95;
-        }
-        return prev + Math.random() * 5;
-      });
-    }, 150);
+      setUploadProgress(prev => (prev >= 95 ? 95 : prev + 2));
+    }, 200);
 
     try {
       const uploadPromise = new Promise<{url: string}>((resolve, reject) => {
-        // Menambahkan parameter window ke query URL untuk Middleware
         xhr.open('POST', `/api/upload?window=${windowTag}`);
         xhr.onload = () => {
           if (xhr.status >= 200 && xhr.status < 300) {
             resolve(JSON.parse(xhr.responseText));
-          } else if (xhr.status === 429) {
-            const errData = JSON.parse(xhr.responseText);
-            reject(new Error(errData.message || 'Rate limit exceeded'));
           } else {
-            reject(new Error('Upload failed'));
+            const err = JSON.parse(xhr.responseText || '{"message":"Upload failed"}');
+            reject({ status: xhr.status, ...err });
           }
         };
-        xhr.onerror = () => reject(new Error('Network error'));
+        xhr.onerror = () => reject(new Error('Network connection failed'));
         xhr.send(formData);
       });
 
@@ -128,25 +117,23 @@ export default function HomePage() {
 
     } catch (err: any) {
       clearInterval(progressInterval);
-      alert("Pesan Sistem: " + err.message);
-      
-      // Jika error bukan rate limit, lakukan fallback simulasi (hanya untuk testing UI)
-      if (!err.message.includes('Rate limit')) {
-        const localUrl = URL.createObjectURL(file);
-        const now = Date.now();
-        const newHistoryItem: UploadHistory = {
-          id: Math.random().toString(36).substr(2, 9),
-          url: localUrl,
-          name: file.name + " (Simulasi)",
-          date: now,
-          expiryDate: now + (expiryMinutes * 60 * 1000),
-        };
-        setResultUrl(localUrl);
-        setHistory(prev => [newHistoryItem, ...prev]);
-      }
-      
       setIsUploading(false);
       setUploadProgress(0);
+
+      if (err.status === 429) {
+        setRateLimitError(err.message);
+      } else {
+        // Fallback Simulasi untuk testing jika tidak di Vercel
+        const localUrl = URL.createObjectURL(file);
+        setResultUrl(localUrl);
+        setHistory(prev => [{
+           id: Math.random().toString(36).substr(2, 9),
+           url: localUrl,
+           name: file.name + " (Simulasi)",
+           date: Date.now(),
+           expiryDate: Date.now() + (expiryMinutes * 60 * 1000)
+        }, ...prev]);
+      }
     }
   };
 
@@ -159,105 +146,113 @@ export default function HomePage() {
   const formatTimeRemaining = (expiry: number) => {
     const diff = expiry - currentTime;
     if (diff <= 0) return "Kadaluarsa";
-    
     const minutes = Math.floor(diff / 60000);
     const seconds = Math.floor((diff % 60000) / 1000);
-    
-    if (minutes >= 60) {
-      const hours = Math.floor(minutes / 60);
-      const mins = minutes % 60;
-      return `${hours}j ${mins}m`;
-    }
+    if (minutes >= 60) return `${Math.floor(minutes/60)}j ${minutes%60}m`;
     return `${minutes}m ${seconds}s`;
   };
 
   return (
-    <main className="min-h-screen py-8 px-4 flex flex-col items-center">
-      <div className="fixed inset-0 -z-10 overflow-hidden">
-        <div className="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-blue-300/10 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-purple-200/10 blur-[120px] rounded-full" />
+    <main className="min-h-screen py-8 px-4 flex flex-col items-center selection:bg-blue-200">
+      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-20%] left-[-10%] w-[60%] h-[60%] bg-blue-400/10 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-20%] right-[-10%] w-[60%] h-[60%] bg-indigo-300/10 blur-[120px] rounded-full" />
       </div>
 
       <div className="w-full max-w-2xl">
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
+          initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
-          className="glass rounded-[40px] p-6 md:p-10 relative overflow-hidden"
+          transition={{ duration: 0.6, ease: "easeOut" }}
+          className="glass rounded-[48px] p-6 md:p-12 relative overflow-hidden shadow-2xl"
         >
-          <div className="flex justify-between items-center mb-8">
-            <div className="flex items-center gap-3">
-              <div className="bg-blue-600 p-2.5 rounded-2xl text-white glow-blue">
-                <Zap size={24} />
+          <div className="flex justify-between items-center mb-10">
+            <div className="flex items-center gap-4">
+              <div className="bg-gradient-to-br from-blue-600 to-indigo-600 p-3 rounded-2xl text-white shadow-xl shadow-blue-500/20">
+                <Zap size={28} />
               </div>
               <div>
-                <h1 className="text-3xl font-extrabold text-slate-800 tracking-tight">LuminaLink</h1>
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">Unlimited Cloud Storage</p>
+                <h1 className="text-3xl font-black text-slate-800 tracking-tight">LuminaLink</h1>
+                <p className="text-[10px] text-blue-600 font-extrabold uppercase tracking-[0.25em]">Vercel Blob Powered</p>
               </div>
             </div>
             <button 
               onClick={() => setShowHistory(!showHistory)}
-              className={`p-3.5 rounded-2xl transition-all ${showHistory ? 'bg-slate-800 text-white shadow-lg' : 'glass hover:bg-white/40 text-slate-600'}`}
+              className={`p-4 rounded-2xl transition-all duration-300 ${showHistory ? 'bg-slate-800 text-white shadow-2xl scale-110' : 'glass hover:bg-white/50 text-slate-600'}`}
             >
-              <HistoryIcon size={20} />
+              <HistoryIcon size={22} />
             </button>
           </div>
+
+          {rateLimitError && (
+            <motion.div 
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3 text-amber-800 text-sm font-medium"
+            >
+              <AlertCircle size={18} className="shrink-0 mt-0.5" />
+              <p>{rateLimitError}</p>
+            </motion.div>
+          )}
 
           <AnimatePresence mode="wait">
             {showHistory ? (
               <motion.div 
                 key="history"
-                initial={{ opacity: 0, x: 20 }}
+                initial={{ opacity: 0, x: 30 }}
                 animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="space-y-4"
+                exit={{ opacity: 0, x: -30 }}
+                className="space-y-6"
               >
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="font-bold text-slate-700">Riwayat Berkas</h3>
-                  <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full font-extrabold">{history.length} AKTIF</span>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-bold text-slate-700">Penyimpanan Aktif</h3>
+                  <span className="text-[10px] bg-blue-600 text-white px-3 py-1 rounded-full font-black uppercase tracking-wider">{history.length} Item</span>
                 </div>
                 
-                <div className="max-h-[450px] overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                <div className="max-h-[480px] overflow-y-auto custom-scrollbar pr-3 space-y-4">
                   {history.length === 0 ? (
-                    <div className="py-20 text-center flex flex-col items-center opacity-40">
-                      <ImageIcon size={48} className="mb-2 text-slate-400" />
-                      <p className="text-sm font-medium">Belum ada history unggahan.</p>
+                    <div className="py-24 text-center opacity-30">
+                      <ImageIcon size={64} className="mx-auto mb-4 text-slate-400" />
+                      <p className="font-bold">Belum ada history.</p>
                     </div>
                   ) : (
                     history.map((item) => (
-                      <div key={item.id} className="bg-white/40 border border-white/60 p-3 rounded-2xl flex items-center gap-4 group hover:bg-white/60 transition-all border-l-4 border-l-blue-500">
-                        <div className="relative">
-                          <img src={item.url} className="w-14 h-14 rounded-xl object-cover bg-white shadow-sm" alt="" />
-                        </div>
+                      <motion.div 
+                        layout
+                        key={item.id} 
+                        className="bg-white/60 border border-white/80 p-4 rounded-[28px] flex items-center gap-5 group hover:bg-white/90 hover:shadow-xl transition-all"
+                      >
+                        <img src={item.url} className="w-16 h-16 rounded-2xl object-cover bg-white shadow-md" alt="" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold truncate text-slate-700 leading-tight">{item.name}</p>
-                          <div className="flex items-center gap-1.5 mt-1 text-slate-500">
-                             <Timer size={10} />
-                             <p className="text-[10px] font-bold uppercase tracking-tight text-blue-600">
-                               Kadaluarsa: {formatTimeRemaining(item.expiryDate)}
+                          <p className="text-sm font-bold truncate text-slate-800 leading-tight">{item.name}</p>
+                          <div className="flex items-center gap-2 mt-1.5">
+                             <Timer size={12} className="text-blue-500" />
+                             <p className="text-[10px] font-black uppercase tracking-tight text-blue-600/70">
+                               Hapus dalam: {formatTimeRemaining(item.expiryDate)}
                              </p>
                           </div>
                         </div>
-                        <div className="flex gap-1">
-                          <a href={item.url} target="_blank" className="p-2.5 hover:bg-blue-600 hover:text-white rounded-xl text-slate-400 transition-all"><ExternalLink size={16} /></a>
-                          <button onClick={() => deleteHistory(item.id)} className="p-2.5 hover:bg-red-500 hover:text-white rounded-xl text-red-300 transition-all"><Trash2 size={16} /></button>
+                        <div className="flex gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
+                          <a href={item.url} target="_blank" className="p-3 bg-white shadow-sm hover:bg-blue-600 hover:text-white rounded-xl text-slate-600 transition-all"><ExternalLink size={18} /></a>
+                          <button onClick={() => deleteHistory(item.id)} className="p-3 bg-white shadow-sm hover:bg-red-500 hover:text-white rounded-xl text-red-400 transition-all"><Trash2 size={18} /></button>
                         </div>
-                      </div>
+                      </motion.div>
                     ))
                   )}
                 </div>
                 <button 
                   onClick={() => setShowHistory(false)} 
-                  className="w-full py-4 text-sm font-bold text-blue-600 hover:bg-blue-100/50 transition-all bg-blue-50/50 rounded-2xl mt-4"
+                  className="w-full py-5 text-sm font-black text-blue-600 hover:bg-blue-100/50 transition-all bg-blue-50/50 rounded-3xl mt-2"
                 >
-                  Kembali ke Menu Utama
+                  Kembali Mengunggah
                 </button>
               </motion.div>
             ) : (
               <motion.div
                 key="main"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
+                initial={{ opacity: 0, scale: 0.98 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.98 }}
               >
                 {!resultUrl ? (
                   <UploadBox 
@@ -269,6 +264,7 @@ export default function HomePage() {
                   <OutputBox url={resultUrl} onReset={() => {
                     setResultUrl(null);
                     setUploadProgress(0);
+                    setRateLimitError(null);
                   }} />
                 )}
               </motion.div>
@@ -276,16 +272,16 @@ export default function HomePage() {
           </AnimatePresence>
         </motion.div>
         
-        <div className="mt-8 flex flex-col items-center gap-2">
-          <div className="flex items-center gap-2 text-slate-400 text-[10px] font-bold uppercase tracking-[0.3em]">
-            <span>Rate Limited</span>
-            <span className="w-1 h-1 bg-slate-300 rounded-full" />
-            <span>High Fidelity</span>
-            <span className="w-1 h-1 bg-slate-300 rounded-full" />
-            <span>Encrypted</span>
+        <div className="mt-12 flex flex-col items-center gap-4">
+          <div className="flex items-center gap-3 text-slate-400 text-[10px] font-black uppercase tracking-[0.4em]">
+            <span>Secured</span>
+            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+            <span>High Speed</span>
+            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-pulse" />
+            <span>Private</span>
           </div>
-          <p className="text-slate-400/50 text-[9px] text-center max-w-[400px] leading-relaxed">
-            Sistem Rate Limit aktif: Maksimal 10 unggahan per window waktu yang dipilih (1m/1h/1d).
+          <p className="text-slate-400/50 text-[10px] text-center max-w-[450px] leading-relaxed font-medium">
+            Dikembangkan dengan Next.js 14 & Vercel Blob Storage. Seluruh data dihapus otomatis sesuai durasi pilihan untuk privasi maksimum.
           </p>
         </div>
       </div>

@@ -10,6 +10,8 @@ const nextConfig = {
       },
     ],
   },
+  // Mengaktifkan kompresi dan optimasi build untuk Vercel
+  swcMinify: true,
 };
 
 module.exports = nextConfig;
